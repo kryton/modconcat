@@ -50,8 +50,7 @@ module AP_MODULE_DECLARE_DATA concat_module;
  */
 
 typedef struct concat_config_struct {
-	int disabled;
-	int securescan;    
+    int disabled;
 } concat_config_rec;
 
 static const command_rec concat_cmds[] =
@@ -60,11 +59,6 @@ static const command_rec concat_cmds[] =
     AP_INIT_FLAG("concat_disable", ap_set_flag_slot,
                   (void *)APR_OFFSETOF(concat_config_rec, disabled),
                   OR_INDEXES, "disable concat in this location"),
-    AP_INIT_FLAG("concat_securescan", ap_set_flag_slot,
-                (void *)APR_OFFSETOF(concat_config_rec, securescan),
-                OR_INDEXES, 
-				"check permissions for *each* file, otherwise just do a rudimentary check.default True"),
-
     {NULL}
 };
 
@@ -74,7 +68,6 @@ static void *create_concat_config(apr_pool_t *p, char *dummy)
     (concat_config_rec *) apr_pcalloc(p, sizeof(concat_config_rec));
 
     new->disabled = 2;
-    new->securescan = 2;   
 
     return (void *) new;
 }
@@ -86,126 +79,120 @@ static void *merge_concat_configs(apr_pool_t *p, void *basev, void *addv)
     concat_config_rec *add = (concat_config_rec *) addv;
 
     new = (concat_config_rec *) apr_pcalloc(p, sizeof(concat_config_rec));
-	if (add->disabled == 2) {
-		new->disabled = base->disabled;
-	}
-	else {
-    	new->disabled = add->disabled;
-	}
-	if (add->securescan == 2) {
-		new->securescan = base->securescan;
-	}
-	else {
-	 	new->securescan = add->securescan;
-	}
-
+    if (add->disabled == 2) {
+        new->disabled = base->disabled;
+    }
+    else {
+        new->disabled = add->disabled;
+    }
     return new;
 }
 
 static int concat_handler(request_rec *r)
 {
-	concat_config_rec *conf;
-    conn_rec *c = r->connection;	
-	
-    apr_file_t *f = NULL;
-	apr_off_t length=0;
-	apr_time_t mtime;
-	int count=0;
-	char *file_string;
-	char *token;
-    char *strtokstate;
-	apr_bucket_brigade *bb;
+    concat_config_rec *conf;
+    conn_rec *c = r->connection;
 
-	apr_bucket *b;
+    apr_file_t *f = NULL;
+    apr_off_t length=0;
+    apr_time_t mtime;
+    int count=0;
+    char *file_string;
+    char *token;
+    char *strtokstate;
+    apr_bucket_brigade *bb;
+
+    apr_bucket *b;
     apr_status_t rv;
 
     r->allowed |= (AP_METHOD_BIT << M_GET);
     if (r->method_number != M_GET) {
-		return DECLINED;
-	}	
-	
-	if (!r->args) {
-		return DECLINED;
-	}
-	
-	if (r->args[0] != '?') {
-		return DECLINED;
-	}
-
-	conf = (concat_config_rec *) ap_get_module_config(r->per_dir_config, &concat_module);
-	if (conf->disabled == 1)
         return DECLINED;
-	
-	file_string = &(r->args[1]);
-	token = apr_strtok(file_string, ",", &strtokstate);
-	bb = apr_brigade_create(r->pool, c->bucket_alloc);
-	while (token) {
-		char *filename;
-		char *file2;
-		apr_file_t *f = NULL;
-		apr_finfo_t finfo;
-		count++;
-		
-		rv = apr_filepath_merge(&file2, NULL, token,
+    }
+
+    if (!r->args) {
+        return DECLINED;
+    }
+
+    if (r->args[0] != '?') {
+        return DECLINED;
+    }
+
+    conf = (concat_config_rec *) ap_get_module_config(r->per_dir_config, &concat_module);
+    if (conf->disabled == 1)
+        return DECLINED;
+
+    file_string = &(r->args[1]);
+    token = apr_strtok(file_string, ",", &strtokstate);
+    bb = apr_brigade_create(r->pool, c->bucket_alloc);
+    while (token) {
+        char *filename;
+        char *file2;
+        apr_file_t *f = NULL;
+        apr_finfo_t finfo;
+        count++;
+
+        rv = apr_filepath_merge(&file2, NULL, token,
                                 APR_FILEPATH_SECUREROOTTEST |
                                 APR_FILEPATH_NOTABSOLUTE, r->pool);
 
 
-		if (rv != APR_SUCCESS) {
-			ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
-				"mod_concat:filename looks fishy: %s", token);
-			return HTTP_FORBIDDEN;
-		}
-		filename = apr_pstrcat (r->pool, r->filename,  file2, NULL);
-		if ((rv = apr_file_open(&f, filename, APR_READ, APR_OS_DEFAULT, 
-				r->pool)) != APR_SUCCESS) {
-	        ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
-	                    "mod_concat:file permissions deny server access: %s %s", filename,r->uri);
-	        return HTTP_FORBIDDEN;
-		}
-		if (( rv = apr_file_info_get( &finfo, APR_FINFO_MIN, f))!= APR_SUCCESS )  {
-	        ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
-	                    "mod_concat:file info failure: %s", filename);
-	        return HTTP_INTERNAL_SERVER_ERROR;
-		}
-		length += finfo.size;
-		if (count == 1) {
-			request_rec *sub_req;
-			mtime = finfo.mtime;
-			sub_req = ap_sub_req_lookup_file(filename, r, NULL);
-	        if (sub_req->status != HTTP_OK) {
-	            int res = sub_req->status;
-	            ap_destroy_sub_req(sub_req);
-				return res;
-			}
-			ap_set_content_type(r, sub_req->content_type);
-		}
-		else {
-			if (finfo.mtime > mtime ) {
-				mtime = finfo.mtime;
-			}
-		}
-		apr_brigade_insert_file(bb, f, 0, finfo.size, r->pool);
-		token = apr_strtok( NULL, ",", &strtokstate);
-	}
-	b = apr_bucket_eos_create(c->bucket_alloc);
-	APR_BRIGADE_INSERT_TAIL(bb, b);
-	ap_set_content_length(r, length);
-	apr_table_unset(r->headers_out, "ETag");
-	r->mtime = mtime;
-	ap_set_last_modified(r);
-	rv = ap_pass_brigade(r->output_filters, bb);
-	if (rv != APR_SUCCESS) {
-	    ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
-	                  "mod_concat: ap_pass_brigade failed for uri %s", r->uri);
-	    return HTTP_INTERNAL_SERVER_ERROR;
-	}
-	return OK;
+        if (rv != APR_SUCCESS) {
+            ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
+                "mod_concat:filename looks fishy: %s", token);
+            return HTTP_FORBIDDEN;
+        }
+        filename = apr_pstrcat (r->pool, r->filename,  file2, NULL);
+        if ((rv = apr_file_open(&f, filename, APR_READ, APR_OS_DEFAULT, 
+                r->pool)) != APR_SUCCESS) {
+            ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
+                        "mod_concat:file permissions deny server access: %s %s", filename,r->uri);
+            return HTTP_FORBIDDEN;
+        }
+        if (( rv = apr_file_info_get( &finfo, APR_FINFO_MIN, f))!= APR_SUCCESS )  {
+            ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
+                        "mod_concat:file info failure: %s", filename);
+            return HTTP_INTERNAL_SERVER_ERROR;
+        }
+        length += finfo.size;
+        if (count == 1) {
+            request_rec *sub_req;
+            mtime = finfo.mtime;
+            sub_req = ap_sub_req_lookup_file(filename, r, NULL);
+            if (sub_req->status != HTTP_OK) {
+                int res = sub_req->status;
+                ap_destroy_sub_req(sub_req);
+                return res;
+            }
+            ap_set_content_type(r, sub_req->content_type);
+        }
+        else {
+            if (finfo.mtime > mtime ) {
+                mtime = finfo.mtime;
+            }
+        }
+        apr_brigade_insert_file(bb, f, 0, finfo.size, r->pool);
+        token = apr_strtok( NULL, ",", &strtokstate);
+    }
+    b = apr_bucket_eos_create(c->bucket_alloc);
+    APR_BRIGADE_INSERT_TAIL(bb, b);
+    ap_set_content_length(r, length);
+    apr_table_unset(r->headers_out, "ETag");
+    r->mtime = mtime;
+    ap_set_last_modified(r);
+    rv = ap_pass_brigade(r->output_filters, bb);
+    if (rv != APR_SUCCESS) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
+                      "mod_concat: ap_pass_brigade failed for uri %s", r->uri);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+    return OK;
 }
 static void register_hooks(apr_pool_t *p)
 {
-    ap_hook_handler(concat_handler,NULL,NULL,APR_HOOK_MIDDLE);
-  //  ap_hook_map_to_storage(concat_map_to_storage, aszPre, aszPost, APR_HOOK_MIDDLE); 
+    static const char * const aszPost[] = { "mod_autoindex.c", NULL };
+    // we want to have a look at the directories *BEFORE* autoindex gets to it
+    ap_hook_handler(concat_handler,NULL,aszPost,APR_HOOK_MIDDLE);
 
 }
 
