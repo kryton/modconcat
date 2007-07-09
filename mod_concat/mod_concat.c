@@ -17,7 +17,7 @@
 /*
  * mod_concat.c: concatantes several files together
  * URLs will be in the form /<basedir>/??file1,dir2/file2,...
- * Idea stolen from Brad's perlbal.
+ * The Idea was initially thought of by David Davis in Vox, and reimplemented in perlbal.
  * Ian Holsman
  * 15/6/7
  */
