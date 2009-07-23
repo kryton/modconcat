@@ -33,6 +33,7 @@
 #include "ap_config.h"
 #include "httpd.h"
 #include "http_config.h"
+#define CORE_PRIVATE
 #include "http_core.h"
 #include "http_request.h"
 #include "http_protocol.h"
@@ -93,6 +94,7 @@ static int concat_handler(request_rec *r)
     concat_config_rec *conf;
     conn_rec *c = r->connection;
 
+    core_dir_config *d;
     apr_file_t *f = NULL;
     apr_off_t length=0;
     apr_time_t mtime;
@@ -122,6 +124,9 @@ static int concat_handler(request_rec *r)
     if (conf->disabled == 1)
         return DECLINED;
 
+    d = (core_dir_config *)ap_get_module_config(r->per_dir_config,
+                                                &core_module);
+
     file_string = &(r->args[1]);
     token = apr_strtok(file_string, ",", &strtokstate);
     bb = apr_brigade_create(r->pool, c->bucket_alloc);
@@ -143,8 +148,12 @@ static int concat_handler(request_rec *r)
             return HTTP_FORBIDDEN;
         }
         filename = apr_pstrcat (r->pool, r->filename,  file2, NULL);
-        if ((rv = apr_file_open(&f, filename, APR_READ, APR_OS_DEFAULT, 
-                r->pool)) != APR_SUCCESS) {
+        if ((rv = apr_file_open(&f, filename, APR_READ
+#if APR_HAS_SENDFILE
+                    | ((d->enable_sendfile == ENABLE_SENDFILE_OFF)
+                        ? 0 : APR_SENDFILE_ENABLED)
+#endif
+                , APR_OS_DEFAULT, r->pool)) != APR_SUCCESS) {
             ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
                         "mod_concat:file permissions deny server access: %s %s", filename,r->uri);
             return HTTP_FORBIDDEN;
