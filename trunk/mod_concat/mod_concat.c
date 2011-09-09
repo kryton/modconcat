@@ -190,7 +190,7 @@ static int concat_handler(request_rec *r)
     r->mtime = mtime;
     ap_set_last_modified(r);
     rv = ap_pass_brigade(r->output_filters, bb);
-    if (rv != APR_SUCCESS) {
+    if (rv != APR_SUCCESS && !c->aborted) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
                       "mod_concat: ap_pass_brigade failed for uri %s", r->uri);
         return HTTP_INTERNAL_SERVER_ERROR;
